@@ -7,11 +7,11 @@ Output: a path to a filtered alignment with sites masked by N's and strains remo
 """
 
 import os, glob, Bio
-from shutil import copyfile
+from shutil import copyfile, rmtree
 import numpy as np
 from Bio import AlignIO, SeqIO, Seq, Align
 from .utils import run_shell_command, nthreads_value, shquote
-from .tree import load_excluded_sites
+from .tree import load_excluded_sites, mask_sites_in_multiple_sequence_alignment
 from .align import read_alignment
 
 class AlignmentError(Exception):
@@ -22,7 +22,7 @@ class AlignmentError(Exception):
 
 def register_arguments(parser):
     parser.add_argument('--alignment', '-a', required=True, help="alignment in fasta or VCF format")
-    parser.add_argument('--filters', default='all', choices=["treeshrink", "gblocks", "easel", "all"], help="tree builder to use")
+    parser.add_argument('--filters', default='all', choices=["treeshrink", "easel", "all"], help="tree builder to use")
     parser.add_argument('--alpha', type=float, default=0.05, help="(default is 0.05), exclude sequences that significantly increase the tree diameter, with a false-positive rate of alpha. This will be done on a BIONJ tree created with IQ-TREE, or on the tree supplied with --tree. This parameter is equivalent to the -q parameter in TreeShrink")
     parser.add_argument('--gapthresh', type=str, default=0.2, help='only keep columns with <= <x> fraction of gaps in them [default 0.2], using EASEL alimask.')
     parser.add_argument('--lmin', type=str, default=1, help='remove strains w/length < <n> residues using EASEL alimanip (done after all other operations).')
@@ -143,38 +143,7 @@ def run(args):
         print("%d strains removed using lmin and xambig filtering: " % len(remove))
         print("file with information on strains removed is here: ", removed_strains_file)
 
-    # Run gblocks, make a set of sites to be deleted from input alignment
-    if args.filters in ['all', 'gblocks']:
-        call = ["gblocks", fasta_alimanip, "-k=y", "-t=d", "-p=n", "-s=y", "-b5=a", args.gblocks_args]
-        cmd = " ".join(call)
-        print("Running gblocks via:\n\t" + cmd +
-              "\n\tCastresana, J. (2000). Selection of conserved blocks from multiple alignments for their use in phylogenetic analysis." +
-              "\n\tMolecular Biology and Evolution 17, 540-552.\n")
-
-        # set raise_errors to False because gblocks seems to trigger run_shell_command to report an error when it runs fine. 
-        run_shell_command(cmd, raise_errors = False)
-
-
-        # extract sequence P1;Gblocks, which is a mask with .==remove and #==retain
-        # convert to .=1 and #=0 and make it a vector of ints
-        gb_maskfile = "".join([fasta_alimanip, "-gbMask"])
-        seqs = read_alignment(gb_maskfile)
-        gb_mask = str(seqs[-1].seq)[:-1] # mask is the last seq in the fasta, and gblocks adds a "*" that we have to remove
-        
-        print(gb_mask)
-        print(len(gb_mask))
-        print(seqs)
-        egg = read_alignment(fasta_alimanip)
-        print(egg)
-
-        gb_mask = gb_mask.replace("#", "0")
-        gb_mask = gb_mask.replace(".", "1")
-        gb_maskarray = np.array(list(map(int, list(gb_mask))))
-        #os.remove(gb_maskfile) # clean up
-    else:
-        gb_maskarray = np.empty(1)
-
-    # Run EASEL, make another set of sites to be deleted from input alignment. as above, 1 for exclude, 0 for include
+    # Run EASEL, make a set of sites to be deleted from input alignment. 1 for exclude, 0 for include
     if args.filters in ['all', 'easel']:
         # note we pipe to nowhere because esl-alimask streams the output alignment, which we don't want in this case
         esl_maskfile = "".join([fasta_alimanip, "-eslMask"])
@@ -191,13 +160,14 @@ def run(args):
         esl_mask = esl_mask.replace("1", "0")
         esl_mask = esl_mask.replace("f", "1")
         esl_maskarray = np.array(list(map(int, list(esl_mask))))
-        #os.remove(esl_maskfile) # clean up
+        os.remove(esl_maskfile) # clean up
 
     else:
         esl_maskarray = np.empty(1)
 
     # sum the two exclude lists, such that any value >0 means some method thought we should exclude it
-    maskarray = gb_maskarray + esl_maskarray
+    # keeping this here because it may be possible to include gblocks if ever we can figure out why it seems to mis-parse fasta files
+    maskarray = esl_maskarray
     sites_to_remove = np.unique(np.where(maskarray>0))
 
     # add sites the user wants to exclude 
@@ -206,8 +176,8 @@ def run(args):
         sites_to_remove = np.unique(np.append(sites_to_remove, excl_sites))
     
     # remove from the list the sites the user wants to include    
-    if args.include_sites:
-        incl_sites = load_excluded_sites(args.include_sites)
+    if args.retain_sites:
+        incl_sites = load_excluded_sites(args.retain_sites)
         sites_to_remove = np.delete(sites_to_remove, np.where(np.in1d(sites_to_remove, incl_sites)))
 
     # we then make the cut alignment
@@ -215,7 +185,7 @@ def run(args):
 
     if len(sites_to_remove>0):
         masked_sites_file_user = "".join([fasta, "-filtered_sites.txt"])
-        print("list of sites removed by filtering is here:", masked_sites_file)
+        print("list of sites removed by filtering is here:", masked_sites_file_user)
         sites_to_remove_user = sites_to_remove + 1
         np.savetxt(masked_sites_file_user, sites_to_remove_user.astype(int), fmt='%i')
 
@@ -230,25 +200,25 @@ def run(args):
         masked_sites_aln = fasta_alimanip # nothing to do here
 
 
-
-
-
-
     # Run TreeShrink on the masked alignment, make a list of taxa to be deleted from input alignment
     if args.filters in ['all', 'treeshrink']:
 
         # make a quick tree with IQ-TREE, designed to operate very much like fastME here
-        call = ["iqtree", "-s", masked_sites_aln, "-te BIONJ", "-m HKY", "-nt", args.nthreads]
+        print("building fast BIONJ tree in IQ-TREE using HKY model")
+        call = ["iqtree", "-s", masked_sites_aln, "-te BIONJ", "-m HKY", "-nt", str(args.nthreads), "-redo"]
         cmd = " ".join(call)
         run_shell_command(cmd, raise_errors = True)
         bionj_tree = "".join([masked_sites_aln, ".treefile"])
 
+        ts_outdir =  os.path.join(os.path.dirname(bionj_tree), "".join([os.path.basename(bionj_tree), "_treeshrink"]))
+        call = ["run_treeshrink.py", "-t", bionj_tree, "-q", str(args.alpha), "-c", "-o", ts_outdir]
+        cmd = " ".join(call)
+
         print("Running TreeShrink via:\n\t" + cmd +
             "\n\tMai, Uyen, and Siavash Mirarab. TreeShrink: fast and accurate detection of outlier long branches in collections of phylogenetic trees." +
             "\n\tBMC genomics 19.5 (2018): 272.\n")
-        ts_outdir =  os.path.join(os.path.dirname(bionj_tree), "".join([os.path.basename(bionj_tree), "_treeshrink"]))
-        call = ["run_treeshrink.py", "-t", bionj_tree, "-q", str(alpha), "-c", "-o", ts_outdir]
-        cmd = " ".join(call)
+
+
         run_shell_command(cmd, raise_errors = True)
 
         ts_maskfile = glob.glob(os.path.join(ts_outdir, "*.txt"))[0]
@@ -278,13 +248,24 @@ def run(args):
         print("file with information on strains removed is here: ", removed_strains_file)
 
         with open(removed_strains_file, 'a') as f:
-            f.write("strain\treason\n")
             for s in remove:
-                f.write("\t".join([s, "'lmin and xambig filtering with esl-alimanip'\n"]))
+                f.write("\t".join([s, "'filtering with TreeShrink'\n"]))
 
     else:
         
         os.rename(masked_sites_aln, args.output)
 
+    # clean up
+    os.remove(fasta_alimanip)
+    os.remove(masked_sites_file)
+    junk = glob.glob(os.path.join(os.path.dirname(fasta), "masked_*"))
+    for name in junk:
+        if name != args.output:
+            if name.endswith("alimanip.fasta.treefile_treeshrink"):
+                rmtree(name)
+            else:
+                os.remove(name)
 
-    return final_align 
+
+
+    return args.output 

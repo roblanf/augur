@@ -2,14 +2,20 @@ name: augur
 channels:
 - bioconda
 - defaults
+- smirarab
+- r
 dependencies:
 - python=3.6
 - mafft
+- gblocks
 - raxml
 - fasttree
 - iqtree
+- easel
 - vcftools
 - snakemake
+- treeshrink
+- r-bms
 - pip
 - pip:
   - .

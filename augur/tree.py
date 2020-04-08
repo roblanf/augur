@@ -310,9 +310,9 @@ def write_out_informative_fasta(compress_seq, alignment, stripFile=None):
     return fasta_file
 
 
-def mask_sites_in_multiple_sequence_alignment(alignment_file, excluded_sites_file):
+def mask_sites_in_multiple_sequence_alignment(alignment_file, excluded_sites_file, mask_char="N"):
     """Creates a new multiple sequence alignment FASTA file from which the given
-    excluded sites have been removed and returns the filename of the new
+    excluded sites have been replaced with mask_char (default "N") and returns the filename of the new
     alignment.
 
     Parameters
@@ -321,7 +321,7 @@ def mask_sites_in_multiple_sequence_alignment(alignment_file, excluded_sites_fil
         path to the original multiple sequence alignment file
 
     excluded_sites_file : str
-        path to a text file containing each nucleotide position to exclude with one position per line
+        path to a text file containing each nucleotide position to mask with one position per line
 
     Returns
     -------
@@ -349,7 +349,7 @@ def mask_sites_in_multiple_sequence_alignment(alignment_file, excluded_sites_fil
 
             # Replace all excluded sites with Ns.
             for site in excluded_sites:
-                sequence[site] = "N"
+                sequence[site] = mask_char
 
             record.seq = sequence
             Bio.SeqIO.write(record, oh, "fasta")

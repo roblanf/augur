@@ -27,7 +27,6 @@ def register_arguments(parser):
     parser.add_argument('--gapthresh', type=str, default=0.2, help='only keep columns with <= <x> fraction of gaps in them [default 0.2], using EASEL alimask.')
     parser.add_argument('--lmin', type=str, default=1, help='remove strains w/length < <n> residues using EASEL alimanip (done after all other operations).')
     parser.add_argument('--xambig', type=str, default=100000000, help='remove strains with >= <n> ambiguous residues using EASEL alimanip (done after all other operations).')
-    parser.add_argument('--treat_n_as_gap', type=str, default=True, help="Treat N's as gaps? Recommended since ML tree inference treats both the same")
     parser.add_argument('--exclude_strains', type=str, help="file with list of strains that are to be excluded regardless of other filtering steps. One strain per line.")
     parser.add_argument('--retain_strains', type=str, help="file with list of strains that are to be retained regardless of other filtering steps. One strain per line.")
     parser.add_argument('--exclude_sites', type=str, help="file with list of sites that are to be excluded regardless of other filtering steps. This should be one of: a BED file (with a .bed extension), a tab-delimited DRM file, or a plain text file with one position per line (1-indexed in the last case).")
